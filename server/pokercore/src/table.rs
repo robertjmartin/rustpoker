@@ -114,12 +114,13 @@ impl Table {
         }
     }
 
+    // Number of players still in the hand: seats flagged `left` are not counted.
     pub fn player_count(&self) -> u8 {
         let mut count: u8 = 0;
         for seat in &self.seats {
             match seat {
-                Some(_) => count+=1,
-                None => {}
+                Some(s) if !s.left => count+=1,
+                _ => {}
             }
         }
         count
@@ -139,9 +140,9 @@ impl Table {
 
     // return bank balance, None if no player
     pub fn leave(&mut self, seat: u8) -> Option<u32> {
-        match &mut self.seats[seat as usize] {
-            None => None,
-            Some(seat) => {
+        match self.seats.get_mut(seat as usize) {
+            None | Some(None) => None,
+            Some(Some(seat)) => {
                 seat.left = true;
                 let return_value = seat.bank;
                 Some(return_value)
@@ -150,10 +151,11 @@ impl Table {
     }
 
     pub fn bet(&mut self, seat: u8, bet_amount: u32) -> Option<u32> {
-        match &mut self.seats[seat as usize] {
-            None => None,
-            Some(seat) => {
-                let bet_amount = cmp::max(bet_amount, seat.bank);
+        match self.seats.get_mut(seat as usize) {
+            None | Some(None) => None,
+            Some(Some(seat)) => {
+                // A player can never bet more chips than they have.
+                let bet_amount = cmp::min(bet_amount, seat.bank);
                 seat.bank -= bet_amount;
                 seat.bet += bet_amount;
                 let return_value = seat.bank;
