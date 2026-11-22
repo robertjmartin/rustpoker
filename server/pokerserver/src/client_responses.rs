@@ -20,6 +20,7 @@ pub enum ClientResponse {
 pub enum ClientCommandResponse {
     SetAuthentication(AuthenticationContent),
     GetAuthentication,
+    GetHoleCards,
     JoinTable,
     LeaveTable,
     Table,

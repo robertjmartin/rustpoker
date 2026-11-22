@@ -1,5 +1,6 @@
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use serde::Serialize;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static NEXT_DECK_ID: AtomicU32 = AtomicU32::new(1);
@@ -13,7 +14,8 @@ impl DeckId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Rank {
     Two = 2,
     Three = 3,
@@ -34,7 +36,8 @@ impl Rank {
     const ALL: [Rank; 13] = [Rank::Two, Rank::Three, Rank::Four, Rank::Five, Rank::Six, Rank::Seven, Rank::Eight, Rank::Nine, Rank::Ten, Rank::Jack, Rank::Queen, Rank::King, Rank::Ace];
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Suit {
     Hearts,
     Diamonds,
@@ -46,13 +49,21 @@ impl Suit {
     const ALL: [Suit; 4] = [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades];
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Card {
+    #[serde(skip_serializing)]
+    deck_id: DeckId,
     suit: Suit,
     rank: Rank,
-    deck_id: DeckId,
 }
 
 impl Card {
+    /// Build a card directly. Cards dealt from a `Deck` also carry the deck
+    /// they came from; this is for tests and for clients of the evaluator.
+    pub fn new(rank: Rank, suit: Suit) -> Card {
+        Card { rank, suit, deck_id: DeckId::next() }
+    }
+
     pub fn get_value(&self) -> (Rank, Suit) {
         (self.rank, self.suit)
     }

@@ -19,6 +19,7 @@ pub struct ClientMessage {
 pub enum ClientCommand {
     SetAuthentication(SetAuthenticationCommand),
     GetAuthentication,
+    GetHoleCards,
     JoinTable(JoinTableClientCommand),
     LeaveTable,
     Table(ClientTableCommand),
@@ -49,6 +50,7 @@ pub enum TableAction {
     Sit(SitAction),
     Stand,
     Bet(BetAction),
+    Check,
     Fold,
 }
 
@@ -61,6 +63,6 @@ pub struct SitAction {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all="camelCase")]
 pub struct BetAction {
-    bet_amount: u32,
+    pub bet_amount: u32,
 }
 
