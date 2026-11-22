@@ -2,7 +2,7 @@
 use axum::{
     extract::ws::{WebSocket, WebSocketUpgrade, Message},
     extract::{State, Path},
-    response::{Response, IntoResponse},
+    response::{Html, Response, IntoResponse},
     routing::{get, post},
     Router,
     http::StatusCode,
@@ -25,6 +25,8 @@ mod table_command;
 pub use client_command::{*};
 pub use client_responses::{*};
 pub use table_command::{*};
+
+const CLIENT_TEST_HTML: &str = include_str!("../static/test.html");
 
 #[derive(Debug, Clone, Serialize)]
 struct User {
@@ -99,6 +101,7 @@ async fn main() {
     };
 
     let app = Router::new()
+        .route("/test", get(|| async { Html(CLIENT_TEST_HTML) }))
         .route("/ping", get(|| async { "{\"status\": \"ok\"}" }))
         .route("/ws", get(ws_handler))
         .route("/register", post(handle_register))
