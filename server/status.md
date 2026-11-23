@@ -3,7 +3,7 @@
 Last updated: 2026-11-22
 
 This file tracks what the poker server does today and what is left to build. The
-wire protocol reference is `../README.md`; `design.md` holds the original design
+wire protocol reference is `protocol.md`; `design.md` holds the original design
 notes and is partly out of date.
 
 ## What works today

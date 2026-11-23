@@ -68,6 +68,11 @@ The server listens on `0.0.0.0:3000`.
 New users start with a balance of `1000`. The `id` is a v4 UUID and acts as the user's identity for the WebSocket `setAuthentication` command.
  
 ### 3.2 WebSocket protocol
+
+> The complete, implementation-ready protocol reference — every frame, field,
+> rule, derived-state requirement and current quirk — is
+> [`server/protocol.md`](server/protocol.md). The summary below is an overview;
+> use the spec when writing a client.
  
 All messages are JSON text frames. Field names are `camelCase`.
  
@@ -85,7 +90,7 @@ Every client request carries a client-chosen numeric `id` (u32) used to correlat
 | `getAuthentication` | – | Returns the connection's current user. |
 | `getHoleCards` | – | Requires authentication. Asks the worker to resend this player's current hand as a private `holeCards` message. |
 | `joinTable` | `tableId` (uuid) | Requires authentication. Registers the connection to receive table events. |
-| `leaveTable` | – | Currently acknowledged but not acted on. |
+| `leaveTable` | – | Requires authentication. Stands the player up and unsubscribes the socket from table events until `joinTable` is sent again. |
 | `table` | `tableId` (uuid), `action` (object) | Requires authentication. Sends a table action (below). |
  
 Examples:
@@ -128,7 +133,7 @@ Error:
  
 | `error` | When |
 |---|---|
-| `notAuthenticated` | `joinTable` or `table` before a successful `setAuthentication`. |
+| `notAuthenticated` | `getHoleCards`, `joinTable`, `leaveTable` or `table` before a successful `setAuthentication`. |
 | `unknown` | Unknown `userId` on `setAuthentication`, or `getAuthentication` while unauthenticated. |
  
 Notes on current behaviour:
@@ -257,7 +262,7 @@ The worker exits when all `table_tx` senders are dropped (`rx.recv()` returns `N
 | `TableId(Uuid)` | Table identifier (deserialize only). |
 | `ClientMessage { id, command }` | Request envelope. |
 | `ClientCommand` | `SetAuthentication`, `GetAuthentication`, `GetHoleCards`, `JoinTable`, `LeaveTable`, `Table`. |
-| `TableAction` | `Sit`, `Stand`, `Bet`, `Fold`. Reused directly inside `TableCommand`, so the wire type is also the internal type. |
+| `TableAction` | `Sit`, `Stand`, `Bet`, `Check`, `Fold`. Reused directly inside `TableCommand`, so the wire type is also the internal type. |
 | `ClientMessageResponse { id, response }` | Response envelope. |
 | `ClientResponse` | `Success(ClientCommandResponse)` or `Error(ClientCommandError)`. |
 | `ClientAuthResponse` | Defined but not yet used. |
