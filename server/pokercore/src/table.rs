@@ -204,10 +204,18 @@ mod tests {
     #[test]
     fn leave() {
         let mut t = Table::new(8);
-        let s1 = t.sit(500);
-        t.leave(0);
+        assert_eq!(t.sit(500), Some(0));
+
+        // leave only flags the seat: a leaving player may still have chips in the pot.
+        assert_eq!(t.leave(0), Some(500));
+        assert_eq!(t.player_count(), 1);
+
+        // The seat is freed by the Idle cleanup on the next process() tick.
+        t.process();
         assert_eq!(t.player_count(), 0);
 
+        // Leaving an empty seat reports no bank.
+        assert_eq!(t.leave(0), None);
     }
 
 }
