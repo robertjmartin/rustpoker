@@ -103,7 +103,9 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/test", get(|| async { Html(CLIENT_TEST_HTML) }))
+        .route("/test", get(|| async {
+            ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(CLIENT_TEST_HTML))
+        }))
         .route("/ping", get(|| async { "{\"status\": \"ok\"}" }))
         .route("/ws", get(ws_handler))
         .route("/register", post(handle_register))

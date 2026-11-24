@@ -164,7 +164,12 @@ function setConnected(on){
 }
 
 /* ---------- HTTP ---------- */
-const base = () => 'http://' + $('host').value.trim();
+// Browsers block ws:// (and http://) requests made from an https page, so follow
+// the page's own scheme instead of hardcoding http. Opened straight from disk the
+// page has no http(s) scheme, and plain http is the only option there.
+const secure = location.protocol === 'https:';
+const base = () => (secure ? 'https://' : 'http://') + $('host').value.trim();
+const wsBase = () => (secure ? 'wss://' : 'ws://') + $('host').value.trim();
 async function http(method, path, body){
   const url = base() + path;
   log('out','HTTP', method + ' ' + path + (body ? ' ' + JSON.stringify(body) : ''));
@@ -199,12 +204,12 @@ $('btnGetUser').onclick = () => {
 
 /* ---------- WebSocket ---------- */
 function connect(){
-  const url = 'ws://' + $('host').value.trim() + '/ws';
+  const url = wsBase() + '/ws';
   log('sys','WS','Connecting to ' + url);
   try { ws = new WebSocket(url) } catch(e){ return log('err','WS',e.message) }
   ws.onopen = () => { setConnected(true); log('sys','WS','Connected'); };
   ws.onclose = e => { setConnected(false); pending.clear(); log('sys','WS','Closed (code ' + e.code + ')'); ws = null; };
-  ws.onerror = () => log('err','WS','Connection error. Is the server running on ' + $('host').value + '?');
+  ws.onerror = () => log('err','WS','Cannot open ' + url + ' (server down, wrong host/port, or blocked scheme?)');
   ws.onmessage = ev => {
     let msg = null;
     try { msg = JSON.parse(ev.data) } catch {}
@@ -256,7 +261,10 @@ $('btnBad').onclick = () => {
 $('btnClear').onclick = () => { $('log').textContent = ''; };
 if (location.protocol.startsWith('http')) $('host').value = location.host;
 setConnected(false);
-log('sys','READY','Set the host, then Connect or call the HTTP endpoints.');
+log('sys','READY','Page ' + location.href);
+// Prove the page can reach the server it is about to use. If this line fails, the page was
+// not opened from the server (file://, an editor preview, or a different host/origin).
+http('GET','/ping');
 </script>
 </body>
 </html>
