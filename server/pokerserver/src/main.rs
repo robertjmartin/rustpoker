@@ -52,6 +52,8 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
     let mut seat_map: HashMap<UserId, u8> = HashMap::new();
 
     loop {
+        flush_events(&mut table, &connections).await;
+
         select! {
             recv = rx.recv() => {
                 match recv {
@@ -87,6 +89,17 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
                     c.1.send(GameEvent::DummyEvent).await;
                     // todo catch Err and remove dead connections
                 }
+            }
+        }
+    }
+}
+
+// Fan a batch of queued core events out to every connection at the table.
+async fn flush_events(table: &mut Table, connections: &HashMap<UserId, mpsc::Sender<GameEvent>>) {
+    for event in table.drain_events() {
+        for c in connections {
+            if c.1.send(event.clone()).await.is_err() {
+                // todo catch Err and remove dead connections
             }
         }
     }

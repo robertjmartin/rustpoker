@@ -3,7 +3,9 @@ use crate::deck::Deck;
 use crate::deck::Card;
 use crate::game_event::{*};
 
+#[derive(Debug, Clone, Copy)]
 pub struct SeatId(u8);
+#[derive(Debug, Clone, Copy)]
 pub struct BetAmount(u32);
 
 impl SeatId {
@@ -17,7 +19,6 @@ impl BetAmount {
         self.0
     }
 }
-
 
 struct User {
     seat: Option<SeatId>,
@@ -62,6 +63,7 @@ pub struct Table {
     dealer_pos: Option<u8>,
     current_pos: Option<u8>,
     cards: [Option<Card>; 5],
+    events: Vec<GameEvent>,
 }
 
 impl Table {
@@ -82,16 +84,19 @@ impl Table {
         let mut deck = Deck::new();
         deck.shuffle();
         
-        for seat in &mut self.seats {
+        let mut seats_dealt = 0u16;
+        for (idx, seat) in self.seats.iter_mut().enumerate() {
             match seat {
                 None => {},
                 Some(s) => {
                     s.cards[0] = deck.deal();
                     s.cards[1] = deck.deal();
+                    seats_dealt |= 1 << idx;
                 }
             }
         }
         self.deck = Some(deck);
+        self.events.push(GameEvent::Deal(DealEvent { seats_dealt }));
     }
 
     pub fn process(&mut self) {
@@ -115,6 +120,15 @@ impl Table {
     }
 
     pub fn new(size: u8) -> Table {
+        // `DealEvent::seats_dealt` is a bitmask with one bit per seat, so the
+        // table can never be wider than the mask. Tied to the mask's type so
+        // the two cannot drift apart.
+        assert!(
+            size <= u16::BITS as u8,
+            "table size {size} exceeds the {}-seat deal mask",
+            u16::BITS
+        );
+
         Table {
             state: TableState::Idle,
             users: Vec::new(),
@@ -123,6 +137,7 @@ impl Table {
             dealer_pos: None,
             current_pos: None,
             cards: [None, None, None, None, None],
+            events: Vec::new(),
         }
     }
 
@@ -143,6 +158,7 @@ impl Table {
         match empty_seat {
             Some(idx) => {
                 self.seats[idx] = Some(Seat::new(bank));
+                self.events.push(GameEvent::Sit(SitEvent { seat: SeatId(idx as u8) }));
                 Some(idx as u8)
             }
             None => None, // table is full
@@ -162,21 +178,31 @@ impl Table {
     }
 
     pub fn bet(&mut self, seat: u8, bet_amount: u32) -> Option<u32> {
-        match &mut self.seats[seat as usize] {
-            None => None,
-            Some(seat) => {
-                let bet_amount = cmp::max(bet_amount, seat.bank);
-                seat.bank -= bet_amount;
-                seat.bet += bet_amount;
-                let return_value = seat.bank;
-                Some(return_value)
-            }
-        }
+        let seat_state = match &mut self.seats[seat as usize] {
+            None => return None,
+            Some(seat_state) => seat_state,
+        };
+
+        let bet_amount = cmp::max(bet_amount, seat_state.bank);
+        seat_state.bank -= bet_amount;
+        seat_state.bet += bet_amount;
+
+        self.events.push(GameEvent::Bet(BetEvent {
+            seat: SeatId(seat),
+            amount: BetAmount(bet_amount),
+        }));
+
+        Some(seat_state.bank)
+    }
+
+    pub fn drain_events(&mut self) -> Vec<GameEvent> {
+        std::mem::take(&mut self.events)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::game_event::GameEvent;
     use crate::table::Table;
 
     #[test]
@@ -218,4 +244,41 @@ mod tests {
         assert_eq!(t.leave(0), None);
     }
 
+    #[test]
+    #[should_panic(expected = "exceeds the 16-seat deal mask")]
+    fn table_size_is_capped_by_the_deal_mask() {
+        Table::new(17);
+    }
+
+    #[test]
+    fn deal_sets_one_bit_per_seated_player() {
+        let mut t = Table::new(8);
+        t.sit(500);
+        t.sit(500);
+        t.drain_events();
+
+        t.process(); // Idle with two players deals hole cards and moves to Bet1
+
+        match t.drain_events().as_slice() {
+            [GameEvent::Deal(e)] => assert_eq!(e.seats_dealt, 0b11),
+            other => panic!("expected one deal event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn events_are_queued_and_drained() {
+        let mut t = Table::new(8);
+        t.sit(500);
+        t.sit(500);
+        t.bet(0, 10);
+
+        let events = t.drain_events();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(&events[0], GameEvent::Sit(_)));
+        assert!(matches!(&events[1], GameEvent::Sit(_)));
+        assert!(matches!(&events[2], GameEvent::Bet(_)));
+
+        // Draining empties the queue.
+        assert!(t.drain_events().is_empty());
+    }
 }
