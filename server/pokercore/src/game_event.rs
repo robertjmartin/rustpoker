@@ -10,22 +10,22 @@ pub enum GameEvent {
 }
 
 pub struct SitEvent {
-    seat: SeatId,
+    pub seat: SeatId,
 }
 
 pub struct DealEvent {
-    seats_dealt: Vec<SeatId>,
+    pub seats_dealt: Vec<SeatId>,
 }
 
 pub struct BetEvent {
-    seat: SeatId,
-    amount: BetAmount,
+    pub seat: SeatId,
+    pub amount: BetAmount,
 }
 
 pub struct FoldEvent {
-    seat: SeatId,
+    pub seat: SeatId,
 }
 
 pub struct HoleCardEvent {
-    cards: [Card; 2],
+    pub cards: [Card; 2],
 }

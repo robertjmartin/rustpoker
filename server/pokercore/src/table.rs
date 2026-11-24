@@ -6,6 +6,18 @@ use crate::game_event::{*};
 pub struct SeatId(u8);
 pub struct BetAmount(u32);
 
+impl SeatId {
+    pub fn value(&self) -> u8 {
+        self.0
+    }
+}
+
+impl BetAmount {
+    pub fn value(&self) -> u32 {
+        self.0
+    }
+}
+
 
 struct User {
     seat: Option<SeatId>,

@@ -10,7 +10,7 @@ rustpoker/
     ├── pokercore/              library: game rules and state
     │   └── src/{lib,deck,table,game_event}.rs
     └── pokerserver/            binary: axum HTTP + WebSocket server
-        └── src/{main,client_command,client_responses,table_command}.rs
+        └── src/{main,client_command,client_responses,table_command,wire}.rs
 ```
  
 | Crate | Type | Key dependencies | Responsibility |
@@ -136,7 +136,17 @@ Notes on current behaviour:
 - `getAuthentication` currently reports success using the `setAuthentication` command name in the response.
 #### Server-pushed events
  
-The worker pushes `GameEvent`s to joined clients through each connection's channel. At present only `GameEvent::DummyEvent` is forwarded, and it is written to the socket as the plain text frame `dummy event` (not JSON). All other event variants are dropped by `handle_socket`. A structured JSON encoding for events is the main missing piece of the client protocol.
+The worker pushes `GameEvent`s to joined clients through each connection's channel. `handle_socket` converts each one to a `GameEventWire` and sends it as a JSON text frame tagged by an `event` field:
+ 
+```json
+{ "event": "dummyEvent" }
+{ "event": "sit", "seat": 0 }
+{ "event": "deal", "seatsDealt": [0, 1] }
+{ "event": "bet", "seat": 1, "amount": 50 }
+{ "event": "fold", "seat": 1 }
+```
+ 
+Pushed events carry no `id`, which is how a client tells them apart from responses (the test client logs them as `push`). The worker only sends `GameEvent::DummyEvent` for now; every other variant is already encodable and will show up once `Table` emits it.
  
 ## 4. Internal interfaces
  
@@ -183,6 +193,7 @@ The worker exits when all `table_tx` senders are dropped (`rx.recv()` returns `N
 | `ClientMessageResponse { id, response }` | Response envelope. |
 | `ClientResponse` | `Success(ClientCommandResponse)` or `Error(ClientCommandError)`. |
 | `ClientAuthResponse` | Defined but not yet used. |
+| `GameEventWire` | Server-pushed event encoding, built from a `pokercore::GameEvent` via `From<&GameEvent>`. |
  
 Request handling is centralised in `process_client_command(state, &mut auth_user_id, &tx, cmd) -> ClientResponse`. Authentication state is per connection and held as `Option<UserId>` in `handle_socket`.
  
@@ -198,6 +209,8 @@ pub use table::Table;
 ```
  
 `deck` and `table` are private modules, so `Deck`, `Card`, `SeatId` and `BetAmount` are not visible to consumers yet.
+ 
+Event fields are `pub`, and `SeatId`/`BetAmount` expose `value()`, which is all `pokerserver` needs to build wire messages. The newtypes themselves stay internal, and `pokercore` still has no serde dependency.
  
 ### 5.2 `Table`
  

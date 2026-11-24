@@ -22,9 +22,11 @@ use pokercore::{Table, GameEvent};
 mod client_command;
 mod client_responses;
 mod table_command;
+mod wire;
 pub use client_command::{*};
 pub use client_responses::{*};
 pub use table_command::{*};
+pub use wire::{*};
 
 const CLIENT_TEST_HTML: &str = include_str!("../static/test.html");
 
@@ -235,11 +237,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
             game_event = rx.recv() => {
                 match game_event {
-                    Some(GameEvent::DummyEvent) => {
-                        println!("Dummy Event");
-                        socket.send(Message::Text("dummy event".to_string().into())).await;
+                    Some(event) => {
+                        let json = serde_json::to_string(&GameEventWire::from(&event)).unwrap();
+                        if socket.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
                     }
-                    _ => {}
+                    None => break,
                 }
             }
         }
