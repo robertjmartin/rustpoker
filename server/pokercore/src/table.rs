@@ -89,14 +89,20 @@ impl Table {
             match seat {
                 None => {},
                 Some(s) => {
-                    s.cards[0] = deck.deal();
-                    s.cards[1] = deck.deal();
-                    seats_dealt |= 1 << idx;
+                    if !s.left {
+                        let card1 = deck.deal().unwrap();
+                        let card2 = deck.deal().unwrap();
+
+                        seats_dealt |= 1 << idx;
+                        self.events.push(GameEvent::HoleCardEvent(HoleCardEvent {seat: SeatId(idx as u8), cards: [card1.clone(), card2.clone()]}));
+                        s.cards[0] = Some(card1);
+                        s.cards[1] = Some(card2);
+                    }
                 }
             }
         }
         self.deck = Some(deck);
-        self.events.push(GameEvent::Deal(DealEvent { seats_dealt }));
+        self.events.push(GameEvent::TableEvent(TableEvent::Deal(DealEvent { seats_dealt })));
     }
 
     pub fn process(&mut self) {
@@ -158,7 +164,7 @@ impl Table {
         match empty_seat {
             Some(idx) => {
                 self.seats[idx] = Some(Seat::new(bank));
-                self.events.push(GameEvent::Sit(SitEvent { seat: SeatId(idx as u8) }));
+                self.events.push(GameEvent::TableEvent(TableEvent::Sit(SitEvent { seat: SeatId(idx as u8) })));
                 Some(idx as u8)
             }
             None => None, // table is full
@@ -187,10 +193,10 @@ impl Table {
         seat_state.bank -= bet_amount;
         seat_state.bet += bet_amount;
 
-        self.events.push(GameEvent::Bet(BetEvent {
+        self.events.push(GameEvent::TableEvent(TableEvent::Bet(BetEvent {
             seat: SeatId(seat),
             amount: BetAmount(bet_amount),
-        }));
+        })));
 
         Some(seat_state.bank)
     }
@@ -202,7 +208,7 @@ impl Table {
 
 #[cfg(test)]
 mod tests {
-    use crate::game_event::GameEvent;
+    use crate::game_event::{GameEvent, TableEvent};
     use crate::table::Table;
 
     #[test]
@@ -250,6 +256,28 @@ mod tests {
         Table::new(17);
     }
 
+    /// The seat bitmask of the public `Deal` event in a batch of events.
+    fn deal_mask(events: &[GameEvent]) -> u16 {
+        events
+            .iter()
+            .find_map(|e| match e {
+                GameEvent::TableEvent(TableEvent::Deal(d)) => Some(d.seats_dealt),
+                _ => None,
+            })
+            .expect("deal event")
+    }
+
+    /// The seats that got a private hole-card event, in queue order.
+    fn hole_card_seats(events: &[GameEvent]) -> Vec<u8> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                GameEvent::HoleCardEvent(h) => Some(h.seat.value()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn deal_sets_one_bit_per_seated_player() {
         let mut t = Table::new(8);
@@ -259,10 +287,94 @@ mod tests {
 
         t.process(); // Idle with two players deals hole cards and moves to Bet1
 
-        match t.drain_events().as_slice() {
-            [GameEvent::Deal(e)] => assert_eq!(e.seats_dealt, 0b11),
-            other => panic!("expected one deal event, got {other:?}"),
-        }
+        // A deal emits one private hole-card event per dealt seat plus the
+        // public deal event.
+        let events = t.drain_events();
+        assert_eq!(deal_mask(&events), 0b11);
+        assert_eq!(hole_card_seats(&events), [0, 1]);
+    }
+
+    #[test]
+    fn deal_mask_skips_seats_emptied_before_the_deal() {
+        let mut t = Table::new(8);
+        t.sit(500);
+        t.sit(500);
+        t.sit(500);
+        t.leave(1); // no chips committed, so the Idle cleanup frees seat 1
+        t.drain_events();
+
+        t.process();
+
+        let events = t.drain_events();
+        assert_eq!(deal_mask(&events), 0b101);
+        assert_eq!(hole_card_seats(&events), [0, 2]);
+    }
+
+    #[test]
+    fn left_seat_with_chips_is_skipped_by_the_deal() {
+        let mut t = Table::new(8);
+        t.sit(500);
+        t.sit(500);
+        t.bet(0, 10); // chips are committed, so the seat is not freed
+        t.leave(0);
+        t.drain_events();
+
+        t.process();
+
+        let events = t.drain_events();
+        assert_eq!(deal_mask(&events), 0b10, "only seat 1 is dealt");
+        assert_eq!(hole_card_seats(&events), [1], "no cards for the left seat");
+        assert_eq!(
+            t.player_count(),
+            2,
+            "a seat holding chips still occupies the table"
+        );
+    }
+
+    #[test]
+    fn lone_player_does_not_start_a_hand() {
+        let mut t = Table::new(8);
+        t.sit(500);
+        t.drain_events();
+
+        t.process();
+
+        assert!(t.drain_events().is_empty());
+    }
+
+    #[test]
+    fn deal_happens_once_per_hand() {
+        let mut t = Table::new(8);
+        t.sit(500);
+        t.sit(500);
+        t.drain_events();
+
+        t.process(); // Idle -> Bet1: two hole cards and the deal
+        assert_eq!(t.drain_events().len(), 3);
+
+        // Bet1 has no betting logic yet, and in particular does not deal again.
+        t.process();
+        assert!(t.drain_events().is_empty());
+    }
+
+    #[test]
+    fn sit_reuses_the_lowest_freed_seat() {
+        let mut t = Table::new(8);
+        assert_eq!(t.sit(500), Some(0));
+        assert_eq!(t.sit(500), Some(1));
+
+        assert_eq!(t.leave(0), Some(500));
+        t.process(); // frees seat 0; one player left, so no deal
+
+        assert_eq!(t.sit(500), Some(0));
+    }
+
+    #[test]
+    fn bet_on_an_empty_seat_returns_none() {
+        let mut t = Table::new(8);
+
+        assert_eq!(t.bet(0, 10), None);
+        assert!(t.drain_events().is_empty());
     }
 
     #[test]
@@ -274,9 +386,9 @@ mod tests {
 
         let events = t.drain_events();
         assert_eq!(events.len(), 3);
-        assert!(matches!(&events[0], GameEvent::Sit(_)));
-        assert!(matches!(&events[1], GameEvent::Sit(_)));
-        assert!(matches!(&events[2], GameEvent::Bet(_)));
+        assert!(matches!(&events[0], GameEvent::TableEvent(TableEvent::Sit(_))));
+        assert!(matches!(&events[1], GameEvent::TableEvent(TableEvent::Sit(_))));
+        assert!(matches!(&events[2], GameEvent::TableEvent(TableEvent::Bet(_))));
 
         // Draining empties the queue.
         assert!(t.drain_events().is_empty());

@@ -1,6 +1,6 @@
 use serde::ser::{SerializeSeq, Serializer};
 use serde::Serialize;
-use pokercore::GameEvent;
+use pokercore::{GameEvent, HoleCardEvent, TableEvent};
 
 /// Wire representation of a `pokercore::GameEvent`.
 #[derive(Debug, Serialize)]
@@ -10,24 +10,56 @@ pub enum GameEventWire {
     Deal { seats_dealt: SeatBits },
     Bet { seat: u8, amount: u32 },
     Fold { seat: u8 },
+    HoleCards { seat: u8, cards: [CardWire; 2] },
     DummyEvent,
+}
+
+impl From<&TableEvent> for GameEventWire {
+    fn from(event: &TableEvent) -> Self {
+        match event {
+            TableEvent::Sit(e) => GameEventWire::Sit { seat: e.seat.value() },
+            TableEvent::Deal(e) => GameEventWire::Deal {
+                seats_dealt: SeatBits(e.seats_dealt),
+            },
+            TableEvent::Bet(e) => GameEventWire::Bet {
+                seat: e.seat.value(),
+                amount: e.amount.value(),
+            },
+            TableEvent::Fold(e) => GameEventWire::Fold { seat: e.seat.value() },
+            TableEvent::DummyEvent => GameEventWire::DummyEvent,
+        }
+    }
 }
 
 impl From<&GameEvent> for GameEventWire {
     fn from(event: &GameEvent) -> Self {
         match event {
-            GameEvent::Sit(e) => GameEventWire::Sit { seat: e.seat.value() },
-            GameEvent::Deal(e) => GameEventWire::Deal {
-                seats_dealt: SeatBits(e.seats_dealt),
-            },
-            GameEvent::Bet(e) => GameEventWire::Bet {
-                seat: e.seat.value(),
-                amount: e.amount.value(),
-            },
-            GameEvent::Fold(e) => GameEventWire::Fold { seat: e.seat.value() },
-            GameEvent::DummyEvent => GameEventWire::DummyEvent,
+            GameEvent::TableEvent(e) => e.into(),
+            GameEvent::HoleCardEvent(e) => e.into(),
         }
     }
+}
+
+impl From<&HoleCardEvent> for GameEventWire {
+    fn from(event: &HoleCardEvent) -> Self {
+        let cards = std::array::from_fn(|i| {
+            let (rank, suit) = event.cards[i].get_value();
+            CardWire {
+                rank: format!("{rank:?}"),
+                suit: format!("{suit:?}"),
+            }
+        });
+        GameEventWire::HoleCards {
+            seat: event.seat.value(),
+            cards,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct CardWire {
+    rank: String,
+    suit: String,
 }
 
 /// Serialises the dealt-seats bitmask as the JSON array the protocol already

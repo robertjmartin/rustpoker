@@ -17,7 +17,7 @@ use std::{
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration, MissedTickBehavior};
-use pokercore::{Table, GameEvent};
+use pokercore::{Table, GameEvent, TableEvent};
 
 mod client_command;
 mod client_responses;
@@ -52,7 +52,7 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
     let mut seat_map: HashMap<UserId, u8> = HashMap::new();
 
     loop {
-        flush_events(&mut table, &connections).await;
+        flush_events(&mut table, &connections, &seat_map).await;
 
         select! {
             recv = rx.recv() => {
@@ -86,7 +86,7 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
             _ = timer.tick() => {
                 table.process();
                 for c in &connections {
-                    c.1.send(GameEvent::DummyEvent).await;
+                    c.1.send(GameEvent::TableEvent(TableEvent::DummyEvent)).await;
                     // todo catch Err and remove dead connections
                 }
             }
@@ -95,11 +95,32 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
 }
 
 // Fan a batch of queued core events out to every connection at the table.
-async fn flush_events(table: &mut Table, connections: &HashMap<UserId, mpsc::Sender<GameEvent>>) {
+async fn flush_events(
+    table: &mut Table,
+    connections: &HashMap<UserId, mpsc::Sender<GameEvent>>,
+    seat_map: &HashMap<UserId, u8>,
+) {
     for event in table.drain_events() {
-        for c in connections {
-            if c.1.send(event.clone()).await.is_err() {
-                // todo catch Err and remove dead connections
+        match &event {
+            GameEvent::TableEvent(_) => {
+                for c in connections {
+                    if c.1.send(event.clone()).await.is_err() {
+                        // todo catch Err and remove dead connections
+                    }
+                }
+            }
+            GameEvent::HoleCardEvent(hole_cards) => {
+                let seat = hole_cards.seat.value();
+                for (user_id, user_seat) in seat_map {
+                    if *user_seat != seat {
+                        continue;
+                    }
+                    if let Some(tx) = connections.get(user_id) {
+                        if tx.send(event.clone()).await.is_err() {
+                            // todo catch Err and remove dead connections
+                        }
+                    }
+                }
             }
         }
     }

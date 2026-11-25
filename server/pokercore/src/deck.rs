@@ -46,6 +46,7 @@ impl Suit {
     const ALL: [Suit; 4] = [Suit::Clubs, Suit::Diamonds, Suit::Hearts, Suit::Spades];
 }
 
+#[derive(Debug, Clone)]
 pub struct Card {
     suit: Suit,
     rank: Rank,
