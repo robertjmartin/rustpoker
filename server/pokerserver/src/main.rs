@@ -86,7 +86,6 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
             _ = timer.tick() => {
                 table.process();
                 for c in &connections {
-                    c.1.send(GameEvent::TableEvent(TableEvent::DummyEvent)).await;
                     // todo catch Err and remove dead connections
                 }
             }

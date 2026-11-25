@@ -18,7 +18,6 @@ pub enum TableEvent {
     Deal(DealEvent),
     Bet(BetEvent),
     Fold(FoldEvent),
-    DummyEvent,
 }
 
 #[derive(Debug, Clone)]

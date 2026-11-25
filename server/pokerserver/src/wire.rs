@@ -11,7 +11,6 @@ pub enum GameEventWire {
     Bet { seat: u8, amount: u32 },
     Fold { seat: u8 },
     HoleCards { seat: u8, cards: [CardWire; 2] },
-    DummyEvent,
 }
 
 impl From<&TableEvent> for GameEventWire {
@@ -26,7 +25,6 @@ impl From<&TableEvent> for GameEventWire {
                 amount: e.amount.value(),
             },
             TableEvent::Fold(e) => GameEventWire::Fold { seat: e.seat.value() },
-            TableEvent::DummyEvent => GameEventWire::DummyEvent,
         }
     }
 }
