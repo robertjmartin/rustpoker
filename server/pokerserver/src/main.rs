@@ -46,7 +46,14 @@ struct AppState {
 // The long-running task. It exits when all Senders are dropped.
 async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
     let mut table = Table::new(8);
-    let mut timer = time::interval(Duration::from_secs(5));
+    // Test seam: a long interval keeps an e2e run deterministic, because the
+    // harness ticks the table explicitly with POST /test/tick instead of
+    // sleeping. Production keeps the documented 5s heartbeat.
+    let tick_ms = std::env::var("POKER_TICK_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5_000);
+    let mut timer = time::interval(Duration::from_millis(tick_ms));
     timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut connections: HashMap<UserId, mpsc::Sender<GameEvent>> = HashMap::new();
     let mut seat_map: HashMap<UserId, u8> = HashMap::new();
@@ -63,6 +70,9 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
                                 connections.insert(table_command.user_id, join_cmd.tx);
                             },
                             TableCommands::Leave => {},
+                            TableCommands::Tick => {
+                                handle_tick(&mut table, &connections);
+                            }
                             TableCommands::Action(table_action) => {
                                 match table_action.action {
                                     TableAction::Sit(sit_action) => {
@@ -84,12 +94,22 @@ async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
                 }
             }
             _ = timer.tick() => {
-                table.process();
-                for c in &connections {
-                    // todo catch Err and remove dead connections
-                }
+                handle_tick(&mut table, &connections);
             }
         }
+    }
+}
+
+/// Runs one table tick. The production timer and the test-only `/test/tick`
+/// hook both call this, so tick behavior cannot drift between them and new
+/// tick logic only needs to be added here.
+fn handle_tick(
+    table: &mut Table,
+    connections: &HashMap<UserId, mpsc::Sender<GameEvent>>,
+) {
+    table.process();
+    for c in connections {
+        // todo catch Err and remove dead connections
     }
 }
 
@@ -135,7 +155,7 @@ async fn main() {
         table_tx,
     };
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/test", get(|| async {
             ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(CLIENT_TEST_HTML))
         }))
@@ -143,10 +163,24 @@ async fn main() {
         .route("/ws", get(ws_handler))
         .route("/register", post(handle_register))
         .route("/user/{id}" , get(handle_getuser))
-        .route("/usercount", get(handle_usercount))
-        .with_state(state);
+        .route("/usercount", get(handle_usercount));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    // Test-only seam, off by default: the e2e harness advances the table on
+    // demand so gameplay tests do not have to sleep for a timer tick.
+    if std::env::var("POKER_TEST_HOOKS").as_deref() == Ok("1") {
+        app = app.route("/test/tick", post(handle_test_tick));
+    }
+
+    let app = app.with_state(state);
+
+    // Port 0 asks the OS for a free port. The e2e harness reads the
+    // "listening on" line below to discover it, which lets several servers
+    // run at once without clashing.
+    let port = std::env::var("POKER_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3000);
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
         .await
         .unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
@@ -191,6 +225,18 @@ async fn handle_usercount(State(state): State<AppState>) -> (StatusCode, Json<Ha
     };
     
     (StatusCode::OK, Json(result))
+}
+
+async fn handle_test_tick(State(state): State<AppState>) -> StatusCode {
+    // A tick is not tied to a player, so the user id is unused.
+    let command = TableCommand {
+        user_id: UserId(Uuid::nil()),
+        cmd: TableCommands::Tick,
+    };
+    match state.table_tx.send(command).await {
+        Ok(()) => StatusCode::OK,
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
 }
 
 async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {

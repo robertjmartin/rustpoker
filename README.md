@@ -9,8 +9,9 @@ rustpoker/
 └── server/                     (cargo workspace, edition 2024)
     ├── pokercore/              library: game rules and state
     │   └── src/{lib,deck,table,game_event}.rs
-    └── pokerserver/            binary: axum HTTP + WebSocket server
-        └── src/{main,client_command,client_responses,table_command,wire}.rs
+    ├── pokerserver/            binary: axum HTTP + WebSocket server
+    │   └── src/{main,client_command,client_responses,table_command,wire}.rs
+    └── e2e/                    Node end-to-end tests (see e2e/README.md)
 ```
  
 | Crate | Type | Key dependencies | Responsibility |
@@ -48,7 +49,7 @@ Design points:
 
 ## 3. External interfaces (pokerserver)
  
-The server listens on `0.0.0.0:3000`.
+The server listens on `0.0.0.0:3000` by default. Set `POKER_PORT` to change it; `POKER_PORT=0` asks the OS for a free port (the e2e tests use this to run servers in parallel).
  
 ### 3.1 HTTP
  
@@ -284,5 +285,36 @@ WS   /ws
         action:{action:"sit", bankAmount:500}}      ← success   (worker calls Table::sit)
 every 5s: worker → Table::process() → GameEvent to each joined connection
 ```
+
+## 7. Testing
+
+`server/e2e` is an end-to-end suite that launches real server processes and
+drives them over HTTP and WebSocket. It is plain Node (no dependencies) and
+needs Node 22+.
+
+```bash
+cd server/e2e
+npm test              # dev tier, run constantly while coding (5-10s)
+npm run test:checkin  # once before committing (at most 5 minutes)
+npm run test:full      # CI only, no time limit
+```
+
+CI in `.github/workflows/ci.yml` runs `cargo test --workspace` and
+`npm run test:full` on pushes to `main` and on pull requests.
+
+Tags are frequency tiers. Higher tiers include lower ones and each test has
+exactly one tier; test files group tests by area. While the suite is small,
+`checkin` contains every test. See `server/e2e/README.md` for the tier budgets
+and framework layout, and
+[`.agents/skills/pokerserver-e2e/SKILL.md`](.agents/skills/pokerserver-e2e/SKILL.md)
+for the test-and-docs maintenance workflow.
+
+Server settings used by the tests:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `POKER_PORT` | `3000` | Listen port. `0` lets the OS pick a free port. |
+| `POKER_TICK_MS` | `5000` | Table tick interval. |
+| `POKER_TEST_HOOKS` | unset | `1` enables `POST /test/tick`, which runs one table tick on demand. Off by default. |
 
  

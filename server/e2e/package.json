@@ -1,0 +1,17 @@
+{
+  "name": "pokerserver-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end tests for pokerserver: launches real server processes and drives them over HTTP/WebSocket.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "cargo build -p pokerserver --manifest-path ../Cargo.toml",
+    "test": "node scripts/run.js dev",
+    "test:dev": "node scripts/run.js dev",
+    "test:checkin": "node scripts/run.js checkin",
+    "test:full": "node scripts/run.js full"
+  }
+}

@@ -11,6 +11,9 @@ pub enum TableCommands {
     Join(JoinTableCommand),
     Leave,
     Action(ActionTableCommand),
+    /// Test-only: run one `Table::process()` tick on demand. Sent by the
+    /// `/test/tick` handler, which only exists when `POKER_TEST_HOOKS=1`.
+    Tick,
 }
 
 pub struct JoinTableCommand {
