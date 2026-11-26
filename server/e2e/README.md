@@ -2,7 +2,7 @@
 
 Black-box tests for `pokerserver`. Each test launches a real server process and
 drives it the way a browser client does: HTTP for accounts and WebSocket for the
-table protocol. There are no mocking layers and no extra dependencies — Node 22+
+table protocol. There are no mocking layers and no extra dependencies — Node 26+
 provides `fetch`, `WebSocket` and the test runner.
 
 When server behavior changes, follow

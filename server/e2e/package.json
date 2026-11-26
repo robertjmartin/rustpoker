@@ -5,7 +5,7 @@
   "type": "module",
   "description": "End-to-end tests for pokerserver: launches real server processes and drives them over HTTP/WebSocket.",
   "engines": {
-    "node": ">=22"
+    "node": ">=26"
   },
   "scripts": {
     "build": "cargo build -p pokerserver --manifest-path ../Cargo.toml",

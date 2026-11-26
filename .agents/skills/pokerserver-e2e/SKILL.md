@@ -41,7 +41,7 @@ changes, tests **and** test documentation change in the same piece of work.
 6. **Tags have two homes by design.** `TAG_LEVELS` in
    `src/framework/test.js` is the single list; `package.json` has one explicit
    script per tag. Adding a tag means editing both, plus docs.
-7. **No npm dependencies.** Node 22+ built-ins (`fetch`, `WebSocket`,
+7. **No npm dependencies.** Node 26+ built-ins (`fetch`, `WebSocket`,
    `node:test`) are deliberate.
 
 ## Workflow when server behavior changes

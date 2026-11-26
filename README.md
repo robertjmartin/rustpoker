@@ -290,7 +290,7 @@ every 5s: worker → Table::process() → GameEvent to each joined connection
 
 `server/e2e` is an end-to-end suite that launches real server processes and
 drives them over HTTP and WebSocket. It is plain Node (no dependencies) and
-needs Node 22+.
+needs Node 26+.
 
 ```bash
 cd server/e2e
