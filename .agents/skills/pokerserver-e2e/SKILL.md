@@ -43,6 +43,9 @@ changes, tests **and** test documentation change in the same piece of work.
    script per tag. Adding a tag means editing both, plus docs.
 7. **No npm dependencies.** Node 26+ built-ins (`fetch`, `WebSocket`,
    `node:test`) are deliberate.
+8. **Tracing is opt-in per test.** `e2eTest(..., { trace: true })` writes
+   `traces/<test-name>.log` with HTTP and WebSocket traffic. Leave it off in
+   committed tests unless the test is deliberately meant to trace.
 
 ## Workflow when server behavior changes
 
@@ -128,7 +131,8 @@ Checklist:
 - [ ] Negative assertions use `expectNoEvent` / `expectNoResponse` with a
       bounded wait.
 - [ ] `server/output` is the debugging path for a timeout; request errors
-      already include it.
+      already include it. For a full wire log, see `{ trace: true }` in the e2e
+      README.
 - [ ] Test docs updated (counts, coverage notes, layout, contract sections).
 - [ ] `npm test` and `npm run test:checkin` pass.
 

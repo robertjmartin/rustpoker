@@ -6,6 +6,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { requestJson } from './http.js';
+import { currentTrace } from './trace.js';
 
 const FRAMEWORK_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const SERVER_DIR = path.resolve(FRAMEWORK_DIR, '../../..');
@@ -27,6 +28,7 @@ export async function startServer({
   env = {},
   startupTimeoutMs = 10_000,
 } = {}) {
+  const trace = currentTrace();
   if (!existsSync(SERVER_BIN)) {
     throw new Error(
       `pokerserver binary not found at ${SERVER_BIN}\n` +
@@ -45,6 +47,7 @@ export async function startServer({
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  trace?.record('server', 'start', '', `pid ${child.pid} ${SERVER_BIN}`);
 
   // Keep the tail of the server log. Failure messages include it, which is
   // usually enough to see a panic without re-running by hand.
@@ -53,6 +56,7 @@ export async function startServer({
     for (const line of chunk.toString().split('\n')) {
       if (!line.trim()) continue;
       output.push(line);
+      trace?.record('server', 'log', '', line);
       if (output.length > 300) output.shift();
     }
   };
@@ -107,6 +111,7 @@ export async function startServer({
   });
 
   const closed = new Promise((resolve) => child.once('close', resolve));
+  trace?.record('server', 'listening', '', `http://127.0.0.1:${port}`);
 
   return {
     port,
@@ -126,6 +131,7 @@ export async function startServer({
       return result;
     },
     async stop() {
+      trace?.record('server', 'stop', '', `pid ${child.pid}`);
       child.kill('SIGTERM');
       const timedOut = await Promise.race([
         closed.then(() => false),

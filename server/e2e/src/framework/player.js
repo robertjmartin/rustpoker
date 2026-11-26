@@ -6,7 +6,7 @@ import { TestClient } from './client.js';
 
 export async function createPlayer(t, server, name, { bankAmount = 500 } = {}) {
   const user = await registerUser(server, name);
-  const client = await TestClient.connect(server);
+  const client = await TestClient.connect(server, { label: name });
   t.after(() => client.close());
 
   const auth = await client.setAuthentication(user.id);

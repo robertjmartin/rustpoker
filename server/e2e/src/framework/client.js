@@ -2,6 +2,7 @@
 //   * responses: { id, response: "success" | "error", ... } -> correlated by id
 //   * pushes:    { event: "sit" | "deal" | ... }            -> queued for waits
 import { setTimeout as delay } from 'node:timers/promises';
+import { currentTrace } from './trace.js';
 
 /** The server ignores the table id for now, but it must be a valid UUID. */
 export const TABLE_ID = '00000000-0000-0000-0000-000000000000';
@@ -12,6 +13,8 @@ const DEFAULT_EVENT_TIMEOUT_MS = 2_000;
 export class TestClient {
   #server;
   #ws;
+  #label;
+  #trace;
   #nextId = 0;
   #pending = new Map();
   #events = [];
@@ -20,15 +23,19 @@ export class TestClient {
   #cursor = 0;
   #closed = false;
 
-  constructor(server, ws) {
+  constructor(server, ws, { label = 'ws', trace = null } = {}) {
     this.#server = server;
     this.#ws = ws;
+    this.#label = label;
+    this.#trace = trace;
     ws.addEventListener('message', (event) => this.#handleMessage(event.data));
     ws.addEventListener('close', () => this.#rejectPending(new Error('websocket closed')));
   }
 
-  static async connect(server, { timeoutMs = 5_000 } = {}) {
+  static async connect(server, { timeoutMs = 5_000, label = null } = {}) {
     const url = `${server.wsUrl}/ws`;
+    const trace = currentTrace();
+    const connectionLabel = label ?? trace?.nextConnectionLabel() ?? 'ws';
     const ws = new WebSocket(url);
     await new Promise((resolve, reject) => {
       const timer = setTimeout(
@@ -44,7 +51,9 @@ export class TestClient {
         reject(new Error(`websocket failed to connect: ${url}`));
       }, { once: true });
     });
-    return new TestClient(server, ws);
+    const client = new TestClient(server, ws, { label: connectionLabel, trace });
+    trace?.record('ws', 'open', connectionLabel, url);
+    return client;
   }
 
   /** Every push received so far, in arrival order. */
@@ -66,6 +75,11 @@ export class TestClient {
     return this.#ws.readyState === WebSocket.OPEN;
   }
 
+  /** Label used by the trace: a player name, or `ws#N` for anonymous clients. */
+  get label() {
+    return this.#label;
+  }
+
   /** Send a request and resolve with the response that echoes its id. */
   request(command, fields = {}, { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS } = {}) {
     if (!this.isOpen) {
@@ -85,6 +99,7 @@ export class TestClient {
       }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
     });
+    this.#trace?.record('ws', '->', this.#label, payload);
     this.#ws.send(JSON.stringify(payload));
     return response;
   }
@@ -94,6 +109,7 @@ export class TestClient {
     if (!this.isOpen) {
       throw new Error('cannot send raw frame: websocket is not open');
     }
+    this.#trace?.record('ws', '->', this.#label, text);
     this.#ws.send(text);
   }
 
@@ -199,6 +215,7 @@ export class TestClient {
   async close() {
     if (this.#closed) return;
     this.#closed = true;
+    this.#trace?.record('ws', 'close', this.#label);
     try {
       this.#ws.close();
     } catch {
@@ -215,6 +232,7 @@ export class TestClient {
   }
 
   #handleMessage(raw) {
+    this.#trace?.record('ws', '<-', this.#label, typeof raw === 'string' ? raw : String(raw));
     let message;
     try {
       message = JSON.parse(raw);

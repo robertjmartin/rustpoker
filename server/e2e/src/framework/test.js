@@ -12,7 +12,9 @@
 // the suite grows. TAG_LEVELS is the single list of available tags: adding one
 // means adding it here and adding an explicit npm script in package.json.
 // Unknown tags fail at load, so a typo cannot silently select nothing.
+import path from 'node:path';
 import { test as nodeTest } from 'node:test';
+import { TestTrace } from './trace.js';
 
 export const TAGS = {
   DEV: 'dev',
@@ -37,7 +39,7 @@ export function tagsUpTo(level) {
  */
 export const collectionRegistry = [];
 
-export function e2eTest(name, tag, fn, { timeout = 15_000 } = {}) {
+export function e2eTest(name, tag, fn, { timeout = 15_000, trace = false } = {}) {
   if (!TAG_LEVELS.includes(tag)) {
     throw new Error(
       `${name}: unknown test tag "${tag}"; expected one of: ${TAG_LEVELS.join(', ')}`,
@@ -54,5 +56,18 @@ export function e2eTest(name, tag, fn, { timeout = 15_000 } = {}) {
     return; // Deselected: register nothing, print nothing.
   }
 
-  nodeTest(name, { timeout }, fn);
+  if (!trace) {
+    nodeTest(name, { timeout }, fn);
+    return;
+  }
+
+  nodeTest(name, { timeout }, async (t) => {
+    const recorder = new TestTrace(name);
+    console.log(`[trace] ${name} -> ${path.relative(process.cwd(), recorder.file)}`);
+    try {
+      return await recorder.run(() => fn(t));
+    } finally {
+      recorder.close();
+    }
+  });
 }

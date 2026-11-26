@@ -47,4 +47,4 @@ e2eTest('eight players fill the table and a ninth is not seated', TAG, async (t)
 
   assert.deepEqual((await watcher.waitForEvent('deal')).seatsDealt, [0, 1, 2, 3, 4, 5, 6, 7]);
   await ninth.client.expectNoEvent('holeCards', { withinMs: 200 });
-});
+}, {trace: true});

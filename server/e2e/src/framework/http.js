@@ -1,15 +1,24 @@
 // Thin wrappers over the server's HTTP surface. Tests use these instead of
 // fetch directly, so a protocol change is a one-line change here.
+import { currentTrace } from './trace.js';
 
 export class HttpAssertionError extends Error {}
 
-export async function requestJson(baseUrl, method, route, body) {
+// `label` names who the request is for when a caller knows (registration), so
+// its trace line carries the same name as that player's WebSocket.
+export async function requestJson(baseUrl, method, route, body, { label = null } = {}) {
+  const trace = currentTrace();
+  const bodyText = body === undefined ? undefined : JSON.stringify(body);
+  const description = label ? `${label} ${method} ${route}` : `${method} ${route}`;
+  trace?.record('http', '->', description, bodyText);
   const response = await fetch(baseUrl + route, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: bodyText === undefined ? undefined : { 'content-type': 'application/json' },
+    body: bodyText,
   });
   const text = await response.text();
+  const reply = label ? `${label} ${response.status} ${method} ${route}` : `${response.status} ${method} ${route}`;
+  trace?.record('http', '<-', reply, text);
   let parsed = null;
   try {
     parsed = text ? JSON.parse(text) : null;
@@ -32,7 +41,7 @@ export async function ping(server) {
 }
 
 export async function registerUser(server, name) {
-  const result = await requestJson(server.httpUrl, 'POST', '/register', { name });
+  const result = await requestJson(server.httpUrl, 'POST', '/register', { name }, { label: name });
   expectStatus(result, 201, `POST /register (${name})`);
   return result.body;
 }

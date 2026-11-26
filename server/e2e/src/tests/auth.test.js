@@ -16,7 +16,7 @@ e2eTest('setAuthentication binds the connection to an existing user', TAG, async
   // setAuthentication (documented in README §3.2).
   assert.equal(response.command, 'setAuthentication');
   assert.equal(response.userId, alice.user.id);
-});
+}, {trace: true});
 
 e2eTest('setAuthentication rejects an unknown user id', TAG, async (t) => {
   const server = await launchServer(t);

@@ -23,6 +23,28 @@ npm run test:full       # CI only, no time limit
 before every run, so the binary under test always matches the sources. CI runs
 `npm run test:full` from `.github/workflows/ci.yml`.
 
+## Tracing a single test
+
+Tracing is off by default. Add `{ trace: true }` to one test's options to record
+everything that crosses the wire during that test:
+
+```js
+e2eTest('two players are dealt a hand', TAGS.DEV, async (t) => {
+  // ...
+}, { trace: true });
+```
+
+The test prints the location at startup and writes
+`server/e2e/traces/<test-name>.log`. Each line is one event in the order the
+harness observed it: HTTP request/response (method, path, status, body),
+WebSocket connect/close and every sent/received frame (including malformed
+ones), plus server stdout/stderr. Client labels are the player name, or `ws#N`
+for clients created without one. HTTP lines carry the same player name when the
+request is made on their behalf (`POST /register`); requests with no player
+behind them show only the method and path. Traces are overwritten on the next run and
+`traces/` is gitignored. The option does not change test behavior, so remove it
+again once you have reviewed the trace.
+
 ## Frequency tags
 
 Test files group tests by area, but tags say *when* a test runs. Every test has
@@ -94,6 +116,7 @@ server/e2e/
 │   ├── http.js             /ping /register /user/{id} /usercount helpers
 │   ├── client.js           WS client: id-correlated requests, ordered push stream
 │   ├── player.js           high level: register + authenticate + joinAndSit
+│   ├── trace.js            opt-in wire log for one test
 │   ├── test.js             TAG_LEVELS registry and tag-selecting e2eTest
 │   └── index.js            the only module tests import
 └── src/tests/
