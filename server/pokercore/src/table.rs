@@ -52,15 +52,21 @@ impl Seat {
     }
 }
 
-/// Which player counts when walking around the table.
+/// Which seats a walk around the table, or a count of them, accepts.
+///
+/// The variants nest: every `Active` seat is `Occupied`, every `InHand` seat is
+/// `Active`, and every `InHandActive` seat is `InHand`.
 #[derive(Debug, Clone, Copy)]
 enum SeatFilter {
-    /// The next player still at the table: seated, never left, still holding chips.
-    AtTable,
-    /// The next player actually in the current hand: at the table and dealt hole cards.
+    /// A seat with a player in it, even one who left and is only kept around by
+    /// chips still committed to the table.
+    Occupied,
+    /// A player still in the game: never left and still holding chips.
+    Active,
+    /// A player in the current hand: active and dealt hole cards.
     InHand,
-    /// The next player who can still put chips in: in the hand and not all-in.
-    CanBet,
+    /// A player who can still put chips in: in the hand and not all-in.
+    InHandActive,
 }
 
 impl SeatFilter {
@@ -71,15 +77,18 @@ impl SeatFilter {
         };
 
         match self {
+            // Every `Some` seat is occupied; the early return above drops the
+            // empty ones.
+            SeatFilter::Occupied => true,
             // A leaver is out of the game even while chips they committed to
             // the pot keep their seat from being removed.
-            SeatFilter::AtTable => !seat.left && seat.has_chips(),
+            SeatFilter::Active => !seat.left && seat.has_chips(),
             // A left seat can still hold hole cards from the hand in progress;
             // it is not playing them, so it is not in the hand.
             SeatFilter::InHand => !seat.left && seat.cards[0].is_some(),
             // An all-in player has their chips in the bet instead of the bank,
             // so an empty bank is what takes them out of the betting order.
-            SeatFilter::CanBet => !seat.left && seat.cards[0].is_some() && seat.bank > 0,
+            SeatFilter::InHandActive => !seat.left && seat.cards[0].is_some() && seat.bank > 0,
         }
     }
 }
@@ -142,12 +151,20 @@ impl Table {
             .map(|idx| idx as u8)
     }
 
+    /// How many seats `filter` accepts.
+    fn count_seats(&self, filter: SeatFilter) -> u8 {
+        self.seats
+            .iter()
+            .filter(|seat| filter.matches(seat))
+            .count() as u8
+    }
+
     fn advance_dealer(&mut self) {
         // The button is public state, so the new seat is queued as a table
         // event before the deal: clients learn whose button it is for the same
         // hand they are about to be dealt. A table with no seat in play leaves
         // the button where it is and queues nothing.
-        let next = self.next_seat(self.dealer_pos, SeatFilter::AtTable);
+        let next = self.next_seat(self.dealer_pos, SeatFilter::Active);
 
         if let Some(seat) = next {
             self.dealer_pos = Some(seat);
@@ -161,23 +178,23 @@ impl Table {
     ///
     /// Walking on from the button: the next player at the table posts the small
     /// blind, the one after that the big blind, and the one after *them* opens
-    /// the betting. Every step uses `SeatFilter::AtTable`, so seats emptied by
-    /// a leaver are passed over.
+    /// the betting. Every step uses `SeatFilter::Active`, so seats emptied by a
+    /// leaver are passed over.
     fn post_blinds(&mut self) {
         let blind = self.small_blind;
         let mut after = self.dealer_pos;
 
-        if let Some(seat) = self.next_seat(after, SeatFilter::AtTable) {
+        if let Some(seat) = self.next_seat(after, SeatFilter::Active) {
             self.bet(seat, blind);
             after = Some(seat);
         }
 
-        if let Some(seat) = self.next_seat(after, SeatFilter::AtTable) {
+        if let Some(seat) = self.next_seat(after, SeatFilter::Active) {
             self.bet(seat, blind * 2);
             after = Some(seat);
         }
 
-        self.current_pos = self.next_seat(after, SeatFilter::AtTable);
+        self.current_pos = self.next_seat(after, SeatFilter::Active);
     }
 
     fn deal_cards(&mut self) {
@@ -211,7 +228,11 @@ impl Table {
             TableState::Idle => {
                 self.remove_players();
 
-                if self.player_count() > 1 {
+                // A hand needs two players who can actually play it. A seat
+                // that left while holding chips still occupies the table, but
+                // the button, the blinds and the deal all skip it, so it can
+                // never be an opponent.
+                if self.count_seats(SeatFilter::Active) > 1 {
                     self.advance_dealer();
                     self.post_blinds();
                     self.deal_cards();
@@ -247,17 +268,6 @@ impl Table {
             cards: [None, None, None, None, None],
             events: Vec::new(),
         }
-    }
-
-    pub fn player_count(&self) -> u8 {
-        let mut count: u8 = 0;
-        for seat in &self.seats {
-            match seat {
-                Some(_) => count+=1,
-                None => {}
-            }
-        }
-        count
     }
 
     pub fn sit(&mut self, bank: u32) -> Option<u8> {
@@ -320,7 +330,7 @@ mod tests {
         let s2 = t.sit(500);
         assert!(s1.is_some());
         assert!(s2.is_some());
-        assert_eq!(t.player_count(), 2);
+        assert_eq!(t.count_seats(SeatFilter::Occupied), 2);
     }
 
     #[test]
@@ -332,7 +342,7 @@ mod tests {
         assert!(s1.is_some());
         assert!(s2.is_some());
         assert!(s3.is_none());
-        assert_eq!(t.player_count(), 2);
+        assert_eq!(t.count_seats(SeatFilter::Occupied), 2);
     }
 
     #[test]
@@ -342,11 +352,11 @@ mod tests {
 
         // leave only flags the seat: a leaving player may still have chips in the pot.
         assert_eq!(t.leave(0), Some(500));
-        assert_eq!(t.player_count(), 1);
+        assert_eq!(t.count_seats(SeatFilter::Occupied), 1);
 
         // The seat is freed by the Idle cleanup on the next process() tick.
         t.process();
-        assert_eq!(t.player_count(), 0);
+        assert_eq!(t.count_seats(SeatFilter::Occupied), 0);
 
         // Leaving an empty seat reports no bank.
         assert_eq!(t.leave(0), None);
@@ -426,8 +436,9 @@ mod tests {
     #[test]
     fn left_seat_with_chips_is_skipped_by_the_deal() {
         let mut t = Table::new(8, 10);
-        t.sit(500);
-        t.sit(500);
+        t.sit(500); // seat 0, leaves with chips committed
+        t.sit(500); // seat 1
+        t.sit(500); // seat 2
         t.bet(0, 10); // chips are committed, so the seat is not freed
         t.leave(0);
         t.drain_events();
@@ -435,12 +446,44 @@ mod tests {
         t.process();
 
         let events = t.drain_events();
-        assert_eq!(deal_mask(&events), 0b10, "only seat 1 is dealt");
-        assert_eq!(hole_card_seats(&events), [1], "no cards for the left seat");
+        assert_eq!(deal_mask(&events), 0b110, "only seats 1 and 2 are dealt");
+        assert_eq!(hole_card_seats(&events), [1, 2], "no cards for the left seat");
         assert_eq!(
-            t.player_count(),
-            2,
+            t.count_seats(SeatFilter::Occupied),
+            3,
             "a seat holding chips still occupies the table"
+        );
+    }
+
+    /// A seat whose player left but still has chips in front of them cannot be
+    /// removed yet, so it stays occupied. It has no opponent to play against,
+    /// though, and the deal and the button both already skip it, so it must not
+    /// count towards "more than one player" either.
+    #[test]
+    fn left_seat_with_chips_is_not_an_opponent() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0, the only player still at the table
+        t.sit(500); // seat 1
+        t.bet(1, 10); // committed chips keep seat 1 seated after leaving
+        t.leave(1);
+        t.drain_events();
+
+        assert_eq!(
+            t.count_seats(SeatFilter::Occupied),
+            2,
+            "both seats are still occupied"
+        );
+        assert_eq!(
+            t.count_seats(SeatFilter::Active),
+            1,
+            "only seat 0 is still at the table"
+        );
+
+        t.process();
+
+        assert!(
+            t.drain_events().is_empty(),
+            "one live player is not a hand, even with a left seat still holding chips"
         );
     }
 
@@ -569,7 +612,7 @@ mod tests {
         t.drain_events();
 
         assert_eq!(
-            t.next_seat(Some(0), SeatFilter::AtTable),
+            t.next_seat(Some(0), SeatFilter::Active),
             Some(1),
             "seat 1 is at the table even without cards"
         );
@@ -598,12 +641,12 @@ mod tests {
             "an all-in player is still in the hand"
         );
         assert_eq!(
-            t.next_seat(Some(0), SeatFilter::CanBet),
+            t.next_seat(Some(0), SeatFilter::InHandActive),
             Some(2),
             "seat 1 is skipped: all-in players cannot bet"
         );
-        assert_eq!(t.next_seat(Some(2), SeatFilter::CanBet), Some(0), "wraps around");
-        assert_eq!(t.next_seat(None, SeatFilter::CanBet), Some(0));
+        assert_eq!(t.next_seat(Some(2), SeatFilter::InHandActive), Some(0), "wraps around");
+        assert_eq!(t.next_seat(None, SeatFilter::InHandActive), Some(0));
     }
 
     #[test]
@@ -616,7 +659,7 @@ mod tests {
         t.leave(1);
         t.drain_events();
 
-        assert_eq!(t.next_seat(Some(0), SeatFilter::AtTable), Some(0));
+        assert_eq!(t.next_seat(Some(0), SeatFilter::Active), Some(0));
         assert_eq!(t.next_seat(Some(0), SeatFilter::InHand), Some(0));
     }
 

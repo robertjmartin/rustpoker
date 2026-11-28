@@ -222,7 +222,6 @@ pub struct Table { /* state, small_blind, users, seats, deck, dealer_pos, curren
  
 impl Table {
     pub fn new(size: u8, small_blind: u32) -> Table;       // size = seats, small_blind = chips posted by the small blind
-    pub fn player_count(&self) -> u8;                      // occupied seats
     pub fn sit(&mut self, bank: u32) -> Option<u8>;        // seat index, None if full
     pub fn leave(&mut self, seat: u8) -> Option<u32>;      // marks seat as left, returns bank; None if empty
     pub fn bet(&mut self, seat: u8, bet_amount: u32) -> Option<u32>; // returns remaining bank
@@ -239,14 +238,43 @@ Internal model:
 - `Table.current_pos: Option<u8>` — whose action it is; the blinds put it on the first player to act
 - `Table.cards: [Option<Card>; 5]` for community cards (not yet dealt)
 - `Table.users: Vec<Option<User>>` where `User` holds `game_event_callback` and `hole_card_callback` function pointers. This is an early sketch of the event delivery design and is not used by the server, which uses channels instead.
-- `Table.events: Vec<GameEvent>` — the output queue (see 5.4).
+- `Table.events: Vec<GameEvent>` — the output queue (see 5.5).
 Lifecycle implemented so far:
  
-1. `Idle`: remove seats flagged `left` with no outstanding `bet`/`pot`; if more than one player is seated, advance the button to the next seat still in play (queueing a `dealer` event), post the small blind on the next player at the table and the big blind (2×) on the one after that (queueing a `bet` event for each), point `current_pos` at the player after the big blind, shuffle a new deck, deal two hole cards to each seat, move to `PreFlop`.
+1. `Idle`: remove seats flagged `left` with no outstanding `bet`/`pot`; if more than one player is still active at the table (seated, not left, still holding chips), advance the button to the next seat still in play (queueing a `dealer` event), post the small blind on the next player at the table and the big blind (2×) on the one after that (queueing a `bet` event for each), point `current_pos` at the player after the big blind, shuffle a new deck, deal two hole cards to each seat, move to `PreFlop`.
 2. `PreFlop`–`Bet5`: empty.
-Seat removal is deferred (`leave` only sets a flag) so that a player who leaves mid-hand can still have chips in the pot.
+Seat removal is deferred (`leave` only sets a flag) so that a player who leaves mid-hand can still have chips in the pot. Such a seat still *occupies* the table (it keeps its seat index until the chips are gone) but is no longer *active*: the seat walk, the blinds, the deal and the Idle hand-start gate all skip it, so it never plays and never counts as an opponent (see 5.3).
  
-### 5.3 Deck and cards (`deck.rs`, internal)
+### 5.3 Seat filters (`SeatFilter`, internal)
+
+"Player" is never left implicit. Every seat walk and every count of players takes a `SeatFilter`, and the four variants nest: `Occupied` ⊃ `Active` ⊃ `InHand` ⊃ `InHandActive`. Each one accepts fewer seats than the one before it.
+
+```rust
+enum SeatFilter {
+    Occupied,      // any seat with a player in it: even one who left, even with 0 chips
+    Active,        // never left, still holding chips (bank + bet + pot > 0)
+    InHand,        // active and dealt hole cards
+    InHandActive,  // in the hand and not all-in (bank > 0), so still able to bet
+}
+
+impl Table {
+    fn next_seat(&self, after: Option<u8>, filter: SeatFilter) -> Option<u8>; // first seat accepted, walking on from `after`, wrapping once
+    fn count_seats(&self, filter: SeatFilter) -> u8;                          // how many seats accepted
+}
+```
+
+Both take the same predicate, so a walk and a count can never disagree about who a player is. Which reading each caller means:
+
+- `Occupied` — seat presence. Any `Some` seat, left or not. Used by tests; this is the reading the old `player_count()` named, and it remains the one to use for "is this seat taken".
+- `Active` — who can play the next hand. `advance_dealer`, `post_blinds` and the `Idle` hand-start gate all use it, which is why a hand needs more than one *active* seat and not more than one occupied one.
+- `InHand` — who was dealt in. `PreFlop`–`Bet5` are still placeholders, so today only tests use it; it is the intended filter for walking the betting order.
+- `InHandActive` — who can still put chips in. Same status: tests today, the intended filter for asking whose action it is once betting exists.
+
+The distinction matters because a leaver's seat outlives them: `leave()` only flags the seat, and committed chips keep it from being removed. Gate a hand on occupied seats and a lone player is dealt a hand against the leaver's empty chair — the bug that made the `Idle` gate count `Active` seats.
+
+The enum is private to `pokercore` (not re-exported by `lib.rs`), like `Seat`, `TableState` and `Deck`; consumers see `Table` methods, not filters.
+
+### 5.4 Deck and cards (`deck.rs`, internal)
  
 ```rust
 pub enum Rank { Two = 2, … Ace = 14 }     // Ord
@@ -257,7 +285,7 @@ pub struct Deck { cards, deck_id }        // new(), shuffle(), count(), deal() -
  
 Each `Deck` gets a unique `DeckId` from a global atomic counter, and every `Card` records which deck it came from. Shuffling uses `rand::thread_rng`.
  
-### 5.4 Events (`game_event.rs`)
+### 5.5 Events (`game_event.rs`)
  
 ```rust
 pub enum GameEvent {
