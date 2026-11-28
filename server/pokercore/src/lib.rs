@@ -4,7 +4,7 @@ mod deck;
 mod table;
 
 mod game_event;
-pub use game_event::{GameEvent, TableEvent, HoleCardEvent, DealEvent, BetEvent};
+pub use game_event::{GameEvent, TableEvent, HoleCardEvent, DealerEvent, DealEvent, BetEvent};
 
 pub use table::Table;
 

@@ -27,6 +27,10 @@ e2eTest('two players are dealt a hand and each sees only their own hole cards', 
 
   await server.tick();
 
+  // The button is public and is announced before the deal on every connection.
+  assert.equal((await alice.client.waitForEvent('dealer')).seat, 0);
+  assert.equal((await bob.client.waitForEvent('dealer')).seat, 0);
+
   // Hole cards are pushed before the public deal event on each connection.
   const aliceCards = await alice.client.waitForEvent('holeCards');
   const bobCards = await bob.client.waitForEvent('holeCards');
@@ -39,6 +43,20 @@ e2eTest('two players are dealt a hand and each sees only their own hole cards', 
 
   assert.deepEqual((await alice.client.waitForEvent('deal')).seatsDealt, [0, 1]);
   assert.deepEqual((await bob.client.waitForEvent('deal')).seatsDealt, [0, 1]);
+
+  // The blinds are posted before the deal: seat 1 is the small blind and the
+  // button (seat 0) completes the big blind in a heads-up hand.
+  await alice.client.waitFor(
+    (events) => events.filter((event) => event.event === 'bet').length === 2,
+    { description: 'both blinds' },
+  );
+  const blinds = alice.client.events
+    .filter((event) => event.event === 'bet')
+    .map((event) => [event.seat, event.amount]);
+  assert.deepEqual(blinds, [
+    [1, 10],
+    [0, 20],
+  ]);
 
   // Hole cards are private: no duplicate and no opponent card.
   assert.equal(alice.client.events.filter((event) => event.event === 'holeCards').length, 1);
@@ -53,6 +71,7 @@ e2eTest('a lone player is not dealt until a second player sits', DEV, async (t) 
 
   await server.tick();
   await alice.client.expectNoEvent('deal', { withinMs: 150 });
+  await alice.client.expectNoEvent('dealer', { withinMs: 150 });
 
   const bob = await createPlayer(t, server, 'bob');
   await bob.joinAndSit(500);

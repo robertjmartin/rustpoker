@@ -7,6 +7,7 @@ use pokercore::{GameEvent, HoleCardEvent, TableEvent};
 #[serde(tag = "event", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum GameEventWire {
     Sit { seat: u8 },
+    Dealer { seat: u8 },
     Deal { seats_dealt: SeatBits },
     Bet { seat: u8, amount: u32 },
     Fold { seat: u8 },
@@ -17,6 +18,7 @@ impl From<&TableEvent> for GameEventWire {
     fn from(event: &TableEvent) -> Self {
         match event {
             TableEvent::Sit(e) => GameEventWire::Sit { seat: e.seat.value() },
+            TableEvent::Dealer(e) => GameEventWire::Dealer { seat: e.seat.value() },
             TableEvent::Deal(e) => GameEventWire::Deal {
                 seats_dealt: SeatBits(e.seats_dealt),
             },
@@ -81,6 +83,15 @@ impl Serialize for SeatBits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dealer_serialises_the_button_seat() {
+        let wire = GameEventWire::Dealer { seat: 3 };
+        assert_eq!(
+            serde_json::to_string(&wire).unwrap(),
+            r#"{"event":"dealer","seat":3}"#
+        );
+    }
 
     #[test]
     fn deal_bitmask_serialises_as_a_seat_array() {

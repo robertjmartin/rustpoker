@@ -43,7 +43,7 @@ Design points:
 - **Single-owner table.** The `Table` is owned by one `worker` task. It is never shared behind a lock. All mutations arrive as `TableCommand` messages on an `mpsc` channel, so game state needs no synchronisation.
 - **Per-connection tasks.** Each WebSocket gets its own task (`handle_socket`) and its own `mpsc::channel<GameEvent>`. The sender half is handed to the worker on `Join`, and the worker pushes events through it.
 - **Tick-driven game loop.** The worker also runs an `interval`, which calls `Table::process()` to advance the state machine and then sends events to all connected clients.
-- **Queued events.** `Table` appends to an internal `Vec<GameEvent>` when a method changes state (`sit`, `bet`, `deal_cards`). The worker drains it with `Table::drain_events()` and fans the batch out to every connection. A plain `Vec` means `pokercore` still needs no channel or async dependency.
+- **Queued events.** `Table` appends to an internal `Vec<GameEvent>` when a method changes state (`sit`, `advance_dealer`, `bet`, `deal_cards`). The worker drains it with `Table::drain_events()` and fans the batch out to every connection. A plain `Vec` means `pokercore` still needs no channel or async dependency.
 - **Shared user registry.** `AppState.users` is an `Arc<Mutex<HashMap<UserId, User>>>`, in-memory only 
 - **Layering.** `pokercore` knows nothing about users, sockets or JSON. `pokerserver` translates wire-level commands into `TableCommand`s and `GameEvent`s into wire messages.
 
@@ -143,12 +143,13 @@ The worker pushes `GameEvent`s to joined clients through each connection's chann
 ```json
 { "event": "dummyEvent" }
 { "event": "sit", "seat": 0 }
+{ "event": "dealer", "seat": 0 }
 { "event": "deal", "seatsDealt": [0, 1] }
 { "event": "bet", "seat": 1, "amount": 50 }
 { "event": "fold", "seat": 1 }
 ```
  
-Pushed events carry no `id`, which is how a client tells them apart from responses (the test client logs them as `push`). The worker sends every event the table queued (`sit`, `deal`, `bet` today), plus one `dummyEvent` per 5s tick as a heartbeat. `fold` will appear once folding is implemented.
+Pushed events carry no `id`, which is how a client tells them apart from responses (the test client logs them as `push`). The worker sends every event the table queued (`sit`, `dealer`, `deal`, `bet` today), plus one `dummyEvent` per 5s tick as a heartbeat. `fold` will appear once folding is implemented.
  
 ## 4. Internal interfaces
  
@@ -206,7 +207,7 @@ Request handling is centralised in `process_client_command(state, &mut auth_user
 `lib.rs` currently exports only:
  
 ```rust
-pub use game_event::{GameEvent, DealEvent, BetEvent};
+pub use game_event::{GameEvent, TableEvent, HoleCardEvent, DealerEvent, DealEvent, BetEvent};
 pub use table::Table;
 ```
  
@@ -217,10 +218,10 @@ Event fields are `pub`, and `SeatId`/`BetAmount` expose `value()`, which is all 
 ### 5.2 `Table`
  
 ```rust
-pub struct Table { /* state, users, seats, deck, dealer_pos, current_pos, cards[5] */ }
+pub struct Table { /* state, small_blind, users, seats, deck, dealer_pos, current_pos, cards[5] */ }
  
 impl Table {
-    pub fn new(size: u8) -> Table;                         // size = number of seats
+    pub fn new(size: u8, small_blind: u32) -> Table;       // size = seats, small_blind = chips posted by the small blind
     pub fn player_count(&self) -> u8;                      // occupied seats
     pub fn sit(&mut self, bank: u32) -> Option<u8>;        // seat index, None if full
     pub fn leave(&mut self, seat: u8) -> Option<u32>;      // marks seat as left, returns bank; None if empty
@@ -233,14 +234,16 @@ impl Table {
 Internal model:
  
 - `Seat { bank, bet, pot, left, cards: [Option<Card>; 2] }`
-- `TableState`: `Idle`, `Bet1` … `Bet5` (betting-round placeholders)
+- `TableState`: `Idle`, `PreFlop`, `Bet2` … `Bet5` (betting-round placeholders)
+- `Table.small_blind: u32` — chips the small blind posts, and the big blind posts twice that
+- `Table.current_pos: Option<u8>` — whose action it is; the blinds put it on the first player to act
 - `Table.cards: [Option<Card>; 5]` for community cards (not yet dealt)
 - `Table.users: Vec<Option<User>>` where `User` holds `game_event_callback` and `hole_card_callback` function pointers. This is an early sketch of the event delivery design and is not used by the server, which uses channels instead.
 - `Table.events: Vec<GameEvent>` — the output queue (see 5.4).
 Lifecycle implemented so far:
  
-1. `Idle`: remove seats flagged `left` with no outstanding `bet`/`pot`; if more than one player is seated, shuffle a new deck, deal two hole cards to each seat, move to `Bet1`.
-2. `Bet1`–`Bet5`: empty.
+1. `Idle`: remove seats flagged `left` with no outstanding `bet`/`pot`; if more than one player is seated, advance the button to the next seat still in play (queueing a `dealer` event), post the small blind on the next player at the table and the big blind (2×) on the one after that (queueing a `bet` event for each), point `current_pos` at the player after the big blind, shuffle a new deck, deal two hole cards to each seat, move to `PreFlop`.
+2. `PreFlop`–`Bet5`: empty.
 Seat removal is deferred (`leave` only sets a flag) so that a player who leaves mid-hand can still have chips in the pot.
  
 ### 5.3 Deck and cards (`deck.rs`, internal)
@@ -258,14 +261,19 @@ Each `Deck` gets a unique `DeckId` from a global atomic counter, and every `Card
  
 ```rust
 pub enum GameEvent {
-    Sit(SitEvent),      // { seat }
-    Deal(DealEvent),    // { seats_dealt: u16 bitmask, bit N = seat N }
-    Bet(BetEvent),      // { seat, amount }
-    Fold(FoldEvent),    // { seat }
-    DummyEvent,         // placeholder used by the server today
+    TableEvent(TableEvent),        // public: broadcast to every connection
+    HoleCardEvent(HoleCardEvent),  // private: one player only
 }
- 
-pub struct HoleCardEvent { cards: [Card; 2] }   // private to the player, not yet part of GameEvent
+
+pub enum TableEvent {
+    Sit(SitEvent),          // { seat }
+    Dealer(DealerEvent),    // { seat } — the button moved to this seat
+    Deal(DealEvent),        // { seats_dealt: u16 bitmask, bit N = seat N }
+    Bet(BetEvent),          // { seat, amount }
+    Fold(FoldEvent),        // { seat }
+}
+
+pub struct HoleCardEvent { seat, cards: [Card; 2] }   // private to the player
 ```
  
 Events are the intended output of the core: the table emits them and the server fans them out to clients. Emitting happens through a free `emit(&mut self.events, event)` helper — a `&mut self` method would conflict with the `&mut self.seats` loops that produce the events. Nothing is delivered until the server calls `Table::drain_events()`.

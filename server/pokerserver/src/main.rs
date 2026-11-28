@@ -45,7 +45,7 @@ struct AppState {
 
 // The long-running task. It exits when all Senders are dropped.
 async fn worker(mut rx: mpsc::Receiver<TableCommand>) {
-    let mut table = Table::new(8);
+    let mut table = Table::new(8, 10);
     // Test seam: a long interval keeps an e2e run deterministic, because the
     // harness ticks the table explicitly with POST /test/tick instead of
     // sleeping. Production keeps the documented 5s heartbeat.

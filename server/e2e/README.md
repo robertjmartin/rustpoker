@@ -192,6 +192,9 @@ Rules of thumb:
 
 ## What is not covered yet
 
-The core has no betting/fold/stand rules and the server ignores `tableId`, so
-the suite pins current behaviour: those actions are acknowledged but do not
-change the hand, and a disconnected player's seat is not freed.
+The core posts the blinds when a hand starts, but has no betting/fold/stand
+rules of its own and the server ignores `tableId`, so the suite pins current
+behaviour: a client `bet`, `fold` or `stand` is acknowledged but does not
+change the hand, and a disconnected player's seat is not freed. The `dealer`
+event is asserted for the first hand only; rotation between hands is covered by
+unit tests in `pokercore`, because a hand never finishes yet.

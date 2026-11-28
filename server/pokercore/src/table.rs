@@ -44,11 +44,49 @@ impl Seat {
             cards: [None, None]
         }
     }
+
+    // Chips can sit in the bank or be committed to the bet and the pot, so a
+    // seat only runs out of chips once all three are empty.
+    fn has_chips(&self) -> bool {
+        self.bank + self.bet + self.pot > 0
+    }
+}
+
+/// Which player counts when walking around the table.
+#[derive(Debug, Clone, Copy)]
+enum SeatFilter {
+    /// The next player still at the table: seated, never left, still holding chips.
+    AtTable,
+    /// The next player actually in the current hand: at the table and dealt hole cards.
+    InHand,
+    /// The next player who can still put chips in: in the hand and not all-in.
+    CanBet,
+}
+
+impl SeatFilter {
+    fn matches(self, seat: &Option<Seat>) -> bool {
+        let seat = match seat {
+            None => return false,
+            Some(seat) => seat,
+        };
+
+        match self {
+            // A leaver is out of the game even while chips they committed to
+            // the pot keep their seat from being removed.
+            SeatFilter::AtTable => !seat.left && seat.has_chips(),
+            // A left seat can still hold hole cards from the hand in progress;
+            // it is not playing them, so it is not in the hand.
+            SeatFilter::InHand => !seat.left && seat.cards[0].is_some(),
+            // An all-in player has their chips in the bet instead of the bank,
+            // so an empty bank is what takes them out of the betting order.
+            SeatFilter::CanBet => !seat.left && seat.cards[0].is_some() && seat.bank > 0,
+        }
+    }
 }
 
 enum TableState {
     Idle,
-    Bet1,
+    PreFlop,
     Bet2,
     Bet3,
     Bet4,
@@ -57,6 +95,7 @@ enum TableState {
 
 pub struct Table {
     state: TableState,
+    small_blind: u32,
     users: Vec<Option<User>>,
     seats: Vec<Option<Seat>>,
     deck: Option<Deck>,
@@ -78,6 +117,67 @@ impl Table {
                 }
             }
         }
+    }
+
+    /// The first seat `filter` accepts when walking forward around the table
+    /// from `after`, wrapping around once.
+    ///
+    /// `after` itself is the last seat searched, so passing the current
+    /// position finds the next player without skipping a lone occupant. With no
+    /// `after`, the walk starts at seat 0 and every seat is a candidate.
+    fn next_seat(&self, after: Option<u8>, filter: SeatFilter) -> Option<u8> {
+        let seat_count = self.seats.len();
+        if seat_count == 0 {
+            return None;
+        }
+
+        let start = match after {
+            None => 0,
+            Some(pos) => (pos as usize + 1) % seat_count,
+        };
+
+        (0..seat_count)
+            .map(|step| (start + step) % seat_count)
+            .find(|&idx| filter.matches(&self.seats[idx]))
+            .map(|idx| idx as u8)
+    }
+
+    fn advance_dealer(&mut self) {
+        // The button is public state, so the new seat is queued as a table
+        // event before the deal: clients learn whose button it is for the same
+        // hand they are about to be dealt. A table with no seat in play leaves
+        // the button where it is and queues nothing.
+        let next = self.next_seat(self.dealer_pos, SeatFilter::AtTable);
+
+        if let Some(seat) = next {
+            self.dealer_pos = Some(seat);
+            self.events.push(GameEvent::TableEvent(TableEvent::Dealer(DealerEvent {
+                seat: SeatId(seat),
+            })));
+        }
+    }
+
+    /// Post the blinds and point `current_pos` at the first player to act.
+    ///
+    /// Walking on from the button: the next player at the table posts the small
+    /// blind, the one after that the big blind, and the one after *them* opens
+    /// the betting. Every step uses `SeatFilter::AtTable`, so seats emptied by
+    /// a leaver are passed over.
+    fn post_blinds(&mut self) {
+        let blind = self.small_blind;
+        let mut after = self.dealer_pos;
+
+        if let Some(seat) = self.next_seat(after, SeatFilter::AtTable) {
+            self.bet(seat, blind);
+            after = Some(seat);
+        }
+
+        if let Some(seat) = self.next_seat(after, SeatFilter::AtTable) {
+            self.bet(seat, blind * 2);
+            after = Some(seat);
+        }
+
+        self.current_pos = self.next_seat(after, SeatFilter::AtTable);
     }
 
     fn deal_cards(&mut self) {
@@ -112,12 +212,13 @@ impl Table {
                 self.remove_players();
 
                 if self.player_count() > 1 {
+                    self.advance_dealer();
+                    self.post_blinds();
                     self.deal_cards();
-                    //self.seats.iter().position(|s| s.)
-                    self.state = TableState::Bet1;
+                    self.state = TableState::PreFlop;
                 }
             },
-            TableState::Bet1 => {},
+            TableState::PreFlop => {},
             TableState::Bet2 => {},
             TableState::Bet3 => {},
             TableState::Bet4 => {},
@@ -125,7 +226,7 @@ impl Table {
         }
     }
 
-    pub fn new(size: u8) -> Table {
+    pub fn new(size: u8, small_blind: u32) -> Table {
         // `DealEvent::seats_dealt` is a bitmask with one bit per seat, so the
         // table can never be wider than the mask. Tied to the mask's type so
         // the two cannot drift apart.
@@ -137,6 +238,7 @@ impl Table {
 
         Table {
             state: TableState::Idle,
+            small_blind,
             users: Vec::new(),
             seats: (0..size).map(|_| None).collect(),
             deck: None,
@@ -189,7 +291,7 @@ impl Table {
             Some(seat_state) => seat_state,
         };
 
-        let bet_amount = cmp::max(bet_amount, seat_state.bank);
+        let bet_amount = cmp::min(bet_amount, seat_state.bank);
         seat_state.bank -= bet_amount;
         seat_state.bet += bet_amount;
 
@@ -209,11 +311,11 @@ impl Table {
 #[cfg(test)]
 mod tests {
     use crate::game_event::{GameEvent, TableEvent};
-    use crate::table::Table;
+    use crate::table::{SeatFilter, Table};
 
     #[test]
     fn sit() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         let s1 = t.sit(500);
         let s2 = t.sit(500);
         assert!(s1.is_some());
@@ -223,7 +325,7 @@ mod tests {
 
     #[test]
     fn table_full() {
-        let mut t = Table::new(2);
+        let mut t = Table::new(2, 10);
         let s1 = t.sit(500);
         let s2 = t.sit(500);
         let s3 = t.sit(500);
@@ -235,7 +337,7 @@ mod tests {
 
     #[test]
     fn leave() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         assert_eq!(t.sit(500), Some(0));
 
         // leave only flags the seat: a leaving player may still have chips in the pot.
@@ -253,7 +355,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "exceeds the 16-seat deal mask")]
     fn table_size_is_capped_by_the_deal_mask() {
-        Table::new(17);
+        Table::new(17, 10);
     }
 
     /// The seat bitmask of the public `Deal` event in a batch of events.
@@ -265,6 +367,17 @@ mod tests {
                 _ => None,
             })
             .expect("deal event")
+    }
+
+    /// The seat the last `dealer` event in a batch moved the button to.
+    fn dealer_seat(events: &[GameEvent]) -> Option<u8> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                GameEvent::TableEvent(TableEvent::Dealer(d)) => Some(d.seat.value()),
+                _ => None,
+            })
+            .last()
     }
 
     /// The seats that got a private hole-card event, in queue order.
@@ -280,12 +393,12 @@ mod tests {
 
     #[test]
     fn deal_sets_one_bit_per_seated_player() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         t.sit(500);
         t.sit(500);
         t.drain_events();
 
-        t.process(); // Idle with two players deals hole cards and moves to Bet1
+        t.process(); // Idle with two players deals hole cards and moves to PreFlop
 
         // A deal emits one private hole-card event per dealt seat plus the
         // public deal event.
@@ -296,7 +409,7 @@ mod tests {
 
     #[test]
     fn deal_mask_skips_seats_emptied_before_the_deal() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         t.sit(500);
         t.sit(500);
         t.sit(500);
@@ -312,7 +425,7 @@ mod tests {
 
     #[test]
     fn left_seat_with_chips_is_skipped_by_the_deal() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         t.sit(500);
         t.sit(500);
         t.bet(0, 10); // chips are committed, so the seat is not freed
@@ -333,7 +446,7 @@ mod tests {
 
     #[test]
     fn lone_player_does_not_start_a_hand() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         t.sit(500);
         t.drain_events();
 
@@ -344,22 +457,62 @@ mod tests {
 
     #[test]
     fn deal_happens_once_per_hand() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         t.sit(500);
         t.sit(500);
         t.drain_events();
 
-        t.process(); // Idle -> Bet1: two hole cards and the deal
-        assert_eq!(t.drain_events().len(), 3);
+        // Idle -> PreFlop: the button, the two blinds, two hole cards and the deal.
+        t.process();
+        assert_eq!(t.drain_events().len(), 6);
 
-        // Bet1 has no betting logic yet, and in particular does not deal again.
+        // PreFlop has no betting logic yet, and in particular does not deal again.
         t.process();
         assert!(t.drain_events().is_empty());
     }
 
+    /// The chips in `seat`'s bank and in front of them.
+    fn chips(t: &Table, seat: usize) -> (u32, u32) {
+        match &t.seats[seat] {
+            None => panic!("seat {seat} is empty"),
+            Some(s) => (s.bank, s.bet),
+        }
+    }
+
+    #[test]
+    fn blinds_are_posted_and_the_first_to_act_follows_the_big_blind() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0, the button
+        t.sit(500); // seat 1
+        t.sit(500); // seat 2
+        t.drain_events();
+
+        t.process(); // Idle -> PreFlop
+
+        assert_eq!(t.dealer_pos, Some(0));
+        assert_eq!(chips(&t, 1), (490, 10), "seat 1 posts the small blind");
+        assert_eq!(chips(&t, 2), (480, 20), "seat 2 posts the big blind");
+        assert_eq!(chips(&t, 0), (500, 0), "the button posts nothing");
+        assert_eq!(t.current_pos, Some(0), "seat 0 is first to act");
+    }
+
+    #[test]
+    fn a_short_stack_posts_a_short_blind() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0, the button
+        t.sit(5); // seat 1, too short to cover the small blind
+        t.drain_events();
+
+        t.process();
+
+        assert_eq!(chips(&t, 1), (0, 5), "only the chips they have go in");
+        assert_eq!(chips(&t, 0), (480, 20), "the button still posts the big blind");
+        assert_eq!(t.current_pos, Some(1), "seat 1 acts first after the big blind");
+    }
+
     #[test]
     fn sit_reuses_the_lowest_freed_seat() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         assert_eq!(t.sit(500), Some(0));
         assert_eq!(t.sit(500), Some(1));
 
@@ -370,8 +523,132 @@ mod tests {
     }
 
     #[test]
+    fn dealer_starts_at_the_first_seated_player() {
+        let mut t = Table::new(8, 10);
+        t.sit(500);
+        t.sit(500);
+
+        t.drain_events();
+        t.advance_dealer();
+        assert_eq!(t.dealer_pos, Some(0));
+
+        let events = t.drain_events();
+        assert_eq!(dealer_seat(&events), Some(0), "the button is announced to clients");
+    }
+
+    #[test]
+    fn dealer_skips_seats_that_have_left_and_wraps_around() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0
+        t.sit(500); // seat 1
+        t.sit(500); // seat 2
+        t.bet(1, 10); // chips committed, so cleanup keeps seat 1 around
+        t.leave(1);
+        t.drain_events();
+
+        t.advance_dealer();
+        assert_eq!(t.dealer_pos, Some(0));
+
+        t.advance_dealer();
+        assert_eq!(t.dealer_pos, Some(2), "seat 1 left the table");
+        let events = t.drain_events();
+        assert_eq!(dealer_seat(&events), Some(2));
+
+        t.advance_dealer();
+        assert_eq!(t.dealer_pos, Some(0), "wraps around to the first seat");
+    }
+
+    #[test]
+    fn next_seat_can_look_past_seats_that_are_not_in_the_hand() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0
+        t.sit(500); // seat 1
+        t.sit(500); // seat 2
+        t.deal_cards(); // every seated player gets hole cards
+        t.seats[1].as_mut().unwrap().cards = [None, None]; // seat 1 sits the hand out
+        t.drain_events();
+
+        assert_eq!(
+            t.next_seat(Some(0), SeatFilter::AtTable),
+            Some(1),
+            "seat 1 is at the table even without cards"
+        );
+        assert_eq!(
+            t.next_seat(Some(0), SeatFilter::InHand),
+            Some(2),
+            "seat 1 skipped: it has no cards"
+        );
+        assert_eq!(t.next_seat(Some(2), SeatFilter::InHand), Some(0), "wraps around");
+        assert_eq!(t.next_seat(None, SeatFilter::InHand), Some(0));
+    }
+
+    #[test]
+    fn next_seat_can_skip_players_who_are_all_in() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0
+        t.sit(500); // seat 1
+        t.sit(500); // seat 2
+        t.deal_cards();
+        t.bet(1, 500); // seat 1 commits every chip: bank empty, all-in
+        t.drain_events();
+
+        assert_eq!(
+            t.next_seat(Some(0), SeatFilter::InHand),
+            Some(1),
+            "an all-in player is still in the hand"
+        );
+        assert_eq!(
+            t.next_seat(Some(0), SeatFilter::CanBet),
+            Some(2),
+            "seat 1 is skipped: all-in players cannot bet"
+        );
+        assert_eq!(t.next_seat(Some(2), SeatFilter::CanBet), Some(0), "wraps around");
+        assert_eq!(t.next_seat(None, SeatFilter::CanBet), Some(0));
+    }
+
+    #[test]
+    fn next_seat_ignores_a_seat_that_left_but_still_has_chips_and_cards() {
+        let mut t = Table::new(8, 10);
+        t.sit(500); // seat 0
+        t.sit(500); // seat 1
+        t.deal_cards();
+        t.bet(1, 10); // committed chips keep the seat around
+        t.leave(1);
+        t.drain_events();
+
+        assert_eq!(t.next_seat(Some(0), SeatFilter::AtTable), Some(0));
+        assert_eq!(t.next_seat(Some(0), SeatFilter::InHand), Some(0));
+    }
+
+    #[test]
+    fn dealer_keeps_the_button_when_every_other_seat_is_out() {
+        let mut t = Table::new(8, 10);
+        t.sit(500);
+
+        t.drain_events();
+        t.advance_dealer();
+        assert_eq!(t.dealer_pos, Some(0));
+        t.drain_events();
+
+        t.advance_dealer();
+        assert_eq!(t.dealer_pos, Some(0));
+        let events = t.drain_events();
+        assert_eq!(dealer_seat(&events), Some(0), "a lone player keeps the button");
+    }
+
+    #[test]
+    fn no_dealer_event_without_a_hand() {
+        let mut t = Table::new(8, 10);
+        t.sit(500);
+        t.drain_events();
+
+        t.process(); // a lone player does not start a hand
+        assert!(t.drain_events().is_empty());
+    }
+
+    #[test]
     fn bet_on_an_empty_seat_returns_none() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
 
         assert_eq!(t.bet(0, 10), None);
         assert!(t.drain_events().is_empty());
@@ -379,7 +656,7 @@ mod tests {
 
     #[test]
     fn events_are_queued_and_drained() {
-        let mut t = Table::new(8);
+        let mut t = Table::new(8, 10);
         t.sit(500);
         t.sit(500);
         t.bet(0, 10);

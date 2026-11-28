@@ -44,8 +44,7 @@ changes, tests **and** test documentation change in the same piece of work.
 7. **No npm dependencies.** Node 26+ built-ins (`fetch`, `WebSocket`,
    `node:test`) are deliberate.
 8. **Tracing is opt-in per test.** `e2eTest(..., { trace: true })` writes
-   `traces/<test-name>.log` with HTTP and WebSocket traffic. Leave it off in
-   committed tests unless the test is deliberately meant to trace.
+   `traces/<test-name>.log` with HTTP and WebSocket traffic. Leave it off in committed tests, for local debugging only.
 
 ## Workflow when server behavior changes
 
@@ -156,4 +155,5 @@ when the server implements more:
 - `bet`, `fold` and `stand` are acknowledged but not applied by the worker.
 - `tableId` is parsed but ignored.
 - A disconnect does not free the player's seat or remove the connection.
-- The table only deals from `Idle`; betting rounds are placeholders.
+- The table only deals from `Idle`; it posts the blinds, then betting rounds
+  are placeholders.

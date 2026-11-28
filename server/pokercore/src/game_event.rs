@@ -15,6 +15,7 @@ pub enum GameEvent {
 #[derive(Debug, Clone)]
 pub enum TableEvent {
     Sit(SitEvent),
+    Dealer(DealerEvent),
     Deal(DealEvent),
     Bet(BetEvent),
     Fold(FoldEvent),
@@ -22,6 +23,12 @@ pub enum TableEvent {
 
 #[derive(Debug, Clone)]
 pub struct SitEvent {
+    pub seat: SeatId,
+}
+
+#[derive(Debug, Clone)]
+pub struct DealerEvent {
+    /// The seat the button moved to for the hand about to start.
     pub seat: SeatId,
 }
 
